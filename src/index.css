@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: #14151F;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.035) 1px, transparent 0);
+  background-size: 22px 22px;
+  color: #EDEEF5;
+  font-family: "Inter", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #D4A24C;
+  color: #14151F;
+}
+
+/* thin brass scrollbar, because the default one breaks the mood */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #33364A;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8A6C34;
+}
+
+.focus-brass:focus-visible {
+  outline: 2px solid #D4A24C;
+  outline-offset: 2px;
+}
+
+.seal-texture {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(212, 162, 76, 0.4) 0px,
+    rgba(212, 162, 76, 0.4) 1px,
+    transparent 1px,
+    transparent 14px
+  );
+}
+
+/* hairline wax-seal divider used sparingly as a structural device */
+.seal-divider {
+  position: relative;
+}
+.seal-divider::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #33364A 20%, #33364A 80%, transparent);
+}
