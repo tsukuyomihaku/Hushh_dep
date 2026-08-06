@@ -4,6 +4,19 @@
 // suitable for a table, a chart, or CSV export for a research paper.
 // -----------------------------------------------------------------------
 
+// crypto.getRandomValues() refuses to fill more than 65,536 bytes in a
+// single call (a hard browser limit) — so for larger test messages we
+// fill the buffer in 65,536-byte chunks instead of one big call.
+const MAX_RANDOM_CHUNK = 65536;
+function secureRandomBytes(size) {
+  const buf = new Uint8Array(size);
+  for (let offset = 0; offset < size; offset += MAX_RANDOM_CHUNK) {
+    const end = Math.min(offset + MAX_RANDOM_CHUNK, size);
+    crypto.getRandomValues(buf.subarray(offset, end));
+  }
+  return buf;
+}
+
 function stats(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
@@ -23,11 +36,6 @@ function bytesEqual(a, b) {
   return true;
 }
 
-// -------------------------------------------------------------------------
-// Key exchange benchmark: for each algorithm, run `trials` full round trips
-// of (generate two key pairs -> both sides derive the shared secret ->
-// confirm both results match).
-// -------------------------------------------------------------------------
 export async function benchmarkKeyExchange(algo, trials, onProgress) {
   const keygenTimes = [];
   const exchangeTimes = [];
@@ -36,28 +44,20 @@ export async function benchmarkKeyExchange(algo, trials, onProgress) {
   for (let i = 0; i < trials; i++) {
     const t0 = performance.now();
     const aliceKeys = await algo.keygen();
-    const t1 = performance.now();
-    keygenTimes.push(t1 - t0);
+    keygenTimes.push(performance.now() - t0);
 
     const bobKeys = await algo.keygen();
 
     const t2 = performance.now();
     const secretA = await algo.exchange(aliceKeys, bobKeys);
-    const t3 = performance.now();
-    exchangeTimes.push(t3 - t2);
+    exchangeTimes.push(performance.now() - t2);
 
-    // For true Diffie-Hellman-style algorithms, confirm both sides compute
-    // an identical secret. RSA and KEM-style algorithms establish the
-    // secret directionally, so this check is skipped for those (their
-    // correctness is validated by successful encap/decap or wrap/unwrap
-    // inside exchange() itself, which throws on failure).
     if (algo.id.startsWith("ecdh") || algo.id === "x25519") {
       const secretB = await algo.exchange(bobKeys, aliceKeys);
       if (bytesEqual(secretA, secretB)) correctCount++;
     } else {
       correctCount++;
     }
-
     if (onProgress) onProgress(algo.id, i + 1, trials);
   }
 
@@ -75,11 +75,6 @@ export async function benchmarkKeyExchange(algo, trials, onProgress) {
   };
 }
 
-// -------------------------------------------------------------------------
-// Cipher benchmark: for each message size, run `trials` encrypt/decrypt
-// round trips, confirm the plaintext round-trips correctly, and (for
-// authenticated ciphers) confirm tampering is correctly rejected.
-// -------------------------------------------------------------------------
 export async function benchmarkCipher(algo, trials, messageSizes, onProgress) {
   const results = {};
 
@@ -88,47 +83,50 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress) {
     const decryptTimes = [];
     let correctCount = 0;
     let tamperRejectedCount = 0;
-    const tamperTrials = algo.authenticated ? trials : 0;
 
     const key = await algo.keygen();
-    const plaintext = crypto.getRandomValues(new Uint8Array(size));
+    const plaintext = secureRandomBytes(size);
 
     for (let i = 0; i < trials; i++) {
       const t0 = performance.now();
       const { ciphertext, iv } = await algo.encrypt(key, plaintext);
-      const t1 = performance.now();
-      encryptTimes.push(t1 - t0);
+      encryptTimes.push(performance.now() - t0);
 
       const t2 = performance.now();
       const decrypted = await algo.decrypt(key, iv, ciphertext);
-      const t3 = performance.now();
-      decryptTimes.push(t3 - t2);
+      decryptTimes.push(performance.now() - t2);
 
       if (bytesEqual(decrypted, plaintext)) correctCount++;
 
       if (algo.authenticated) {
-        // Flip one byte of the ciphertext and confirm decryption is
-        // correctly rejected (this is the property the Attacker Panel
-        // demonstrates for AES-256-GCM in the live app).
         const tampered = new Uint8Array(ciphertext);
         tampered[0] ^= 0xff;
         try {
           await algo.decrypt(key, iv, tampered);
-          // no error thrown -> tampering was NOT detected (bad)
         } catch {
-          tamperRejectedCount++; // error thrown -> tampering WAS detected (good)
+          tamperRejectedCount++;
         }
       }
-
       if (onProgress) onProgress(algo.id, size, i + 1, trials);
     }
 
+    const encStats = stats(encryptTimes);
+    const decStats = stats(decryptTimes);
+    const encryptThroughputMBs = encStats.mean > 0
+      ? Number(((size / 1_000_000) / (encStats.mean / 1000)).toFixed(2))
+      : 0;
+    const decryptThroughputMBs = decStats.mean > 0
+      ? Number(((size / 1_000_000) / (decStats.mean / 1000)).toFixed(2))
+      : 0;
+
     results[size] = {
-      encryptMs: stats(encryptTimes),
-      decryptMs: stats(decryptTimes),
+      encryptMs: encStats,
+      decryptMs: decStats,
+      encryptThroughputMBs,
+      decryptThroughputMBs,
       correctnessRate: ((correctCount / trials) * 100).toFixed(1),
       tamperDetectionRate: algo.authenticated
-        ? ((tamperRejectedCount / tamperTrials) * 100).toFixed(1)
+        ? ((tamperRejectedCount / trials) * 100).toFixed(1)
         : "N/A (unauthenticated)",
     };
   }
@@ -149,22 +147,27 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress) {
 export function resultsToCSV(keyExchangeResults, cipherResults, messageSizes) {
   const lines = [];
   lines.push("== Key Exchange Algorithms ==");
-  lines.push("Algorithm,Category,Security(bits),QuantumSafe,Standard,KeygenMean(ms),KeygenMedian(ms),ExchangeMean(ms),ExchangeMedian(ms),Correctness(%)");
+  lines.push("Algorithm,Category,Security(bits),QuantumSafe,Standard,KeygenMean(ms),KeygenMedian(ms),KeygenMin(ms),KeygenMax(ms),ExchangeMean(ms),ExchangeMedian(ms),ExchangeMin(ms),ExchangeMax(ms),Correctness(%)");
   for (const r of keyExchangeResults) {
     lines.push([
       r.name, r.category, r.securityBits, r.quantumSafe, r.standard,
-      r.keygenMs.mean, r.keygenMs.median, r.exchangeMs.mean, r.exchangeMs.median, r.correctnessRate,
+      r.keygenMs.mean, r.keygenMs.median, r.keygenMs.min, r.keygenMs.max,
+      r.exchangeMs.mean, r.exchangeMs.median, r.exchangeMs.min, r.exchangeMs.max,
+      r.correctnessRate,
     ].map((v) => `"${v}"`).join(","));
   }
   lines.push("");
   lines.push("== Ciphers ==");
-  lines.push("Algorithm,Category,Security(bits),QuantumSafe,Standard,MessageSize(bytes),EncryptMean(ms),DecryptMean(ms),Correctness(%),TamperDetection(%)");
+  lines.push("Algorithm,Category,Security(bits),QuantumSafe,Standard,MessageSize(bytes),EncryptMean(ms),EncryptMin(ms),EncryptMax(ms),DecryptMean(ms),DecryptMin(ms),DecryptMax(ms),EncryptThroughput(MB/s),DecryptThroughput(MB/s),Correctness(%),TamperDetection(%)");
   for (const r of cipherResults) {
     for (const size of messageSizes) {
       const s = r.bySize[size];
       lines.push([
         r.name, r.category, r.securityBits, r.quantumSafe, r.standard, size,
-        s.encryptMs.mean, s.decryptMs.mean, s.correctnessRate, s.tamperDetectionRate,
+        s.encryptMs.mean, s.encryptMs.min, s.encryptMs.max,
+        s.decryptMs.mean, s.decryptMs.min, s.decryptMs.max,
+        s.encryptThroughputMBs, s.decryptThroughputMBs,
+        s.correctnessRate, s.tamperDetectionRate,
       ].map((v) => `"${v}"`).join(","));
     }
   }
