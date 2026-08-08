@@ -78,7 +78,7 @@ export default function AuthPage() {
               type="email"
               value={form.email}
               onChange={(v) => setForm({ ...form, email: v })}
-              placeholder="alice@ncit.edu.np"
+              placeholder="alice@cosmos.edu.np"
               required
             />
             <Field
