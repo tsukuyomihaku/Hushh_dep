@@ -7,7 +7,7 @@ import {
   sendEmailVerification,
   reload,
 } from "firebase/auth";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { generateKeyPair, exportPrivateKey, importPrivateKey } from "../crypto/cryptoUtils";
 
@@ -59,6 +59,7 @@ export function AuthProvider({ children }) {
       displayName: displayName || email.split("@")[0],
       email,
       publicKey: publicJwk,
+      emailVerified: false,
       createdAt: serverTimestamp(),
     });
     return cred.user;
@@ -116,12 +117,22 @@ export function AuthProvider({ children }) {
   // Firebase's cached user object doesn't auto-update after the person
   // clicks the link in their inbox — reload() re-fetches the account's
   // current state from the server so we can tell whether it's actually
-  // verified yet.
+  // verified yet. Once confirmed, also write it to Firestore — the
+  // Firebase Auth flag itself isn't visible to other users' clients, but
+  // the contact list needs SOME way to know which accounts are real, so
+  // we mirror the confirmed status onto the public profile document.
   async function refreshEmailVerification() {
     if (!auth.currentUser) return false;
     await reload(auth.currentUser);
     const verified = auth.currentUser.emailVerified;
     setEmailVerified(verified);
+    if (verified) {
+      try {
+        await updateDoc(doc(db, "users", auth.currentUser.uid), { emailVerified: true });
+      } catch (err) {
+        console.error("Failed to sync verified status to Firestore:", err);
+      }
+    }
     return verified;
   }
 

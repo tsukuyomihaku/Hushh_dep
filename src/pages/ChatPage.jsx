@@ -47,6 +47,12 @@ export default function ChatPage() {
             continue;
           }
           const data = d.data();
+          // Accounts created before verifying their email (or never
+          // verified at all — e.g. a fake/unreachable address) shouldn't
+          // show up as a contact anyone can message. Docs created before
+          // this field existed have emailVerified === undefined, which is
+          // also correctly excluded here.
+          if (data.emailVerified !== true) continue;
           const fp = await fingerprintFromJwk(data.publicKey);
           list.push({ id: d.id, displayName: data.displayName, email: data.email, fingerprint: fp });
         }
