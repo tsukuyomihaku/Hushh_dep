@@ -43,29 +43,39 @@ function jitterTiedPoints(results, getSecurityBits) {
 // the values ourselves before handing them to Recharts, then plot that
 // transformed number on an ordinary LINEAR axis. Visually this produces
 // genuine log-scale spacing, and we fully control it rather than relying
-// on library behavior. A tickFormatter converts the axis labels and
-// tooltips back to real millisecond values, so nothing displayed is ever
-// the raw log number.
+// on library behavior.
+//
+// Raw log10(ms) values are often NEGATIVE (log10 of anything under 1ms is
+// negative), and BarChart's default zero-baseline assumption can render
+// negative-domain bars inconsistently. To avoid that entire class of
+// problem, every chart's values are shifted so the smallest one sits at
+// exactly 0 — nothing plotted is ever negative. buildLogScale() bundles
+// the shifted ticks/domain plus the plot() and format() functions needed
+// to go real-value -> shifted-log and back, so every chart uses the same
+// logic consistently.
 const LOG_FLOOR = 0.0001;
-const toLog = (v) => Math.log10(v > 0 ? v : LOG_FLOOR);
-const fromLog = (v) => Math.pow(10, v);
 function formatMs(v) {
   if (v >= 10) return v.toFixed(0);
   if (v >= 1) return v.toFixed(1);
   if (v >= 0.01) return v.toFixed(2);
   return v.toFixed(4);
 }
-// Clean, evenly-spaced tick marks at whole powers of ten (…0.01, 0.1, 1,
-// 10, 100…) spanning the real range of values a chart will plot.
-function computeLogTicks(realValues) {
+function buildLogScale(realValues) {
   const positive = realValues.filter((v) => v > 0);
-  if (!positive.length) return [toLog(LOG_FLOOR)];
-  const logs = positive.map(toLog);
+  const logs = positive.length ? positive.map((v) => Math.log10(v)) : [Math.log10(LOG_FLOOR)];
   const lo = Math.floor(Math.min(...logs));
   const hi = Math.ceil(Math.max(...logs));
+  const offset = lo; // shift so `lo` becomes 0
   const ticks = [];
-  for (let i = lo; i <= hi; i++) ticks.push(i);
-  return ticks;
+  for (let i = lo; i <= hi; i++) ticks.push(i - offset);
+  return {
+    ticks,
+    domain: [ticks[0], ticks[ticks.length - 1]],
+    // real ms value -> shifted plot value
+    plot: (v) => Math.log10(v > 0 ? v : LOG_FLOOR) - offset,
+    // shifted plot value (incl. axis ticks) -> real ms value for display
+    format: (shifted) => formatMs(Math.pow(10, shifted + offset)),
+  };
 }
 
 // Custom scatter tooltip: shows the algorithm name and TRUE security bits
@@ -141,30 +151,30 @@ export default function BenchmarkPage() {
     URL.revokeObjectURL(url);
   }
 
+  const keScale = buildLogScale(keResults.flatMap((r) => [r.keygenMs.mean, r.exchangeMs.mean]));
   const keChartData = keResults.map((r) => ({
     name: r.name,
-    "Keygen (ms)": toLog(r.keygenMs.mean),
-    "Exchange (ms)": toLog(r.exchangeMs.mean),
+    "Keygen (ms)": keScale.plot(r.keygenMs.mean),
+    "Exchange (ms)": keScale.plot(r.exchangeMs.mean),
   }));
-  const keTicks = computeLogTicks(keResults.flatMap((r) => [r.keygenMs.mean, r.exchangeMs.mean]));
 
-  const cipherChartData = cipherResults.map((r) => ({
-    name: r.name,
-    "Encrypt 1KB (ms)": toLog(r.bySize[1024]?.encryptMs.mean ?? 0),
-    "Decrypt 1KB (ms)": toLog(r.bySize[1024]?.decryptMs.mean ?? 0),
-  }));
-  const cipherBarTicks = computeLogTicks(
+  const cipherBarScale = buildLogScale(
     cipherResults.flatMap((r) => [r.bySize[1024]?.encryptMs.mean ?? 0, r.bySize[1024]?.decryptMs.mean ?? 0])
   );
+  const cipherChartData = cipherResults.map((r) => ({
+    name: r.name,
+    "Encrypt 1KB (ms)": cipherBarScale.plot(r.bySize[1024]?.encryptMs.mean ?? 0),
+    "Decrypt 1KB (ms)": cipherBarScale.plot(r.bySize[1024]?.decryptMs.mean ?? 0),
+  }));
 
-  const scalingChartData = MESSAGE_SIZES.map((size) => {
-    const row = { size: `${size.toLocaleString()}B` };
-    cipherResults.forEach((r) => { row[r.name] = toLog(r.bySize[size]?.encryptMs.mean ?? 0); });
-    return row;
-  });
-  const scalingTicks = computeLogTicks(
+  const scalingScale = buildLogScale(
     cipherResults.flatMap((r) => MESSAGE_SIZES.map((size) => r.bySize[size]?.encryptMs.mean ?? 0))
   );
+  const scalingChartData = MESSAGE_SIZES.map((size) => {
+    const row = { size: `${size.toLocaleString()}B` };
+    cipherResults.forEach((r) => { row[r.name] = scalingScale.plot(r.bySize[size]?.encryptMs.mean ?? 0); });
+    return row;
+  });
 
   return (
     <div className="min-h-screen bg-void text-ink-100 p-8 font-body">
@@ -226,11 +236,11 @@ export default function BenchmarkPage() {
               <BarChart data={keChartData}>
                 <CartesianGrid stroke="#33364A" />
                 <XAxis dataKey="name" tick={{ fill: "#B7B9CC", fontSize: 11 }} />
-                <YAxis ticks={keTicks} domain={[keTicks[0], keTicks[keTicks.length - 1]]}
-                  tickFormatter={(v) => formatMs(fromLog(v))}
+                <YAxis ticks={keScale.ticks} domain={keScale.domain} allowDecimals={false}
+                  tickFormatter={keScale.format}
                   tick={{ fill: "#B7B9CC", fontSize: 11 }} label={{ value: "ms (log scale)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
                 <Tooltip contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }}
-                  formatter={(value) => `${formatMs(fromLog(value))} ms`} />
+                  formatter={(value) => `${keScale.format(value)} ms`} />
                 <Legend />
                 <Bar dataKey="Keygen (ms)" fill="#D4A24C" />
                 <Bar dataKey="Exchange (ms)" fill="#5B7FDE" />
@@ -239,18 +249,18 @@ export default function BenchmarkPage() {
           </div>
 
           <h3 className="text-sm text-ink-300 mb-2">Security level vs. keygen time</h3>
-          <div className="h-64 mb-4 bg-surface rounded-lg p-4">
+          <div className="h-[28rem] mb-4 bg-surface rounded-lg p-4">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart>
                 <CartesianGrid stroke="#33364A" />
                 <XAxis type="number" dataKey="securityBits" name="Security (bits)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Security (bits) — jittered to separate ties", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
-                <YAxis type="number" dataKey="timeMs" name="Keygen (ms)" ticks={keTicks} domain={[keTicks[0], keTicks[keTicks.length - 1]]}
-                  tickFormatter={(v) => formatMs(fromLog(v))}
+                <YAxis type="number" dataKey="timeMs" name="Keygen (ms)" ticks={keScale.ticks} domain={keScale.domain} allowDecimals={false}
+                  tickFormatter={keScale.format}
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Keygen (ms, log scale)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
-                <ZAxis range={[130, 130]} />
+                <ZAxis range={[200, 200]} />
                 <Tooltip content={<ScatterTooltipContent timeLabel="Keygen" />} />
                 <Legend />
                 {(() => {
@@ -263,7 +273,7 @@ export default function BenchmarkPage() {
                         name: r.name,
                         securityBits: jitter.get(r.id),
                         trueSecurityBits: r.securityBits,
-                        timeMs: toLog(r.keygenMs.mean),
+                        timeMs: keScale.plot(r.keygenMs.mean),
                         trueTimeMs: r.keygenMs.mean,
                       }]}
                       fill={COLORS[i % COLORS.length]}
@@ -309,16 +319,16 @@ export default function BenchmarkPage() {
         <section>
           <h2 className="text-xl text-brass mb-3">Symmetric Ciphers</h2>
 
-          <div className="h-64 mb-4 bg-surface rounded-lg p-4">
+          <div className="h-[28rem] mb-4 bg-surface rounded-lg p-4">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={cipherChartData}>
                 <CartesianGrid stroke="#33364A" />
                 <XAxis dataKey="name" tick={{ fill: "#B7B9CC", fontSize: 11 }} />
-                <YAxis ticks={cipherBarTicks} domain={[cipherBarTicks[0], cipherBarTicks[cipherBarTicks.length - 1]]}
-                  tickFormatter={(v) => formatMs(fromLog(v))}
+                <YAxis ticks={cipherBarScale.ticks} domain={cipherBarScale.domain} allowDecimals={false}
+                  tickFormatter={cipherBarScale.format}
                   tick={{ fill: "#B7B9CC", fontSize: 11 }} label={{ value: "ms (log scale)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
                 <Tooltip contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }}
-                  formatter={(value) => `${formatMs(fromLog(value))} ms`} />
+                  formatter={(value) => `${cipherBarScale.format(value)} ms`} />
                 <Legend />
                 <Bar dataKey="Encrypt 1KB (ms)" fill="#D4A24C" />
                 <Bar dataKey="Decrypt 1KB (ms)" fill="#5B7FDE" />
@@ -327,16 +337,16 @@ export default function BenchmarkPage() {
           </div>
 
           <h3 className="text-sm text-ink-300 mb-2">Encryption time vs. message size (scaling)</h3>
-          <div className="h-64 mb-4 bg-surface rounded-lg p-4">
+          <div className="h-[28rem] mb-4 bg-surface rounded-lg p-4">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={scalingChartData}>
                 <CartesianGrid stroke="#33364A" />
                 <XAxis dataKey="size" tick={{ fill: "#B7B9CC", fontSize: 11 }} />
-                <YAxis ticks={scalingTicks} domain={[scalingTicks[0], scalingTicks[scalingTicks.length - 1]]}
-                  tickFormatter={(v) => formatMs(fromLog(v))}
+                <YAxis ticks={scalingScale.ticks} domain={scalingScale.domain} allowDecimals={false}
+                  tickFormatter={scalingScale.format}
                   tick={{ fill: "#B7B9CC", fontSize: 11 }} label={{ value: "ms (log scale)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
                 <Tooltip contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }}
-                  formatter={(value) => `${formatMs(fromLog(value))} ms`} />
+                  formatter={(value) => `${scalingScale.format(value)} ms`} />
                 <Legend />
                 {cipherResults.map((r, i) => (
                   <Line
@@ -354,18 +364,18 @@ export default function BenchmarkPage() {
           </div>
 
           <h3 className="text-sm text-ink-300 mb-2">Security level vs. encryption time (1KB)</h3>
-          <div className="h-64 mb-4 bg-surface rounded-lg p-4">
+          <div className="h-[28rem] mb-4 bg-surface rounded-lg p-4">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart>
                 <CartesianGrid stroke="#33364A" />
                 <XAxis type="number" dataKey="securityBits" name="Security (bits)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Security (bits) — jittered to separate ties", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
-                <YAxis type="number" dataKey="timeMs" name="Encrypt 1KB (ms)" ticks={cipherBarTicks} domain={[cipherBarTicks[0], cipherBarTicks[cipherBarTicks.length - 1]]}
-                  tickFormatter={(v) => formatMs(fromLog(v))}
+                <YAxis type="number" dataKey="timeMs" name="Encrypt 1KB (ms)" ticks={cipherBarScale.ticks} domain={cipherBarScale.domain} allowDecimals={false}
+                  tickFormatter={cipherBarScale.format}
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Encrypt 1KB (ms, log scale)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
-                <ZAxis range={[130, 130]} />
+                <ZAxis range={[200, 200]} />
                 <Tooltip content={<ScatterTooltipContent timeLabel="Encrypt 1KB" />} />
                 <Legend />
                 {(() => {
@@ -378,7 +388,7 @@ export default function BenchmarkPage() {
                         name: r.name,
                         securityBits: jitter.get(r.id),
                         trueSecurityBits: r.securityBits,
-                        timeMs: toLog(r.bySize[1024]?.encryptMs.mean ?? 0),
+                        timeMs: cipherBarScale.plot(r.bySize[1024]?.encryptMs.mean ?? 0),
                         trueTimeMs: r.bySize[1024]?.encryptMs.mean ?? 0,
                       }]}
                       fill={COLORS[i % COLORS.length]}
