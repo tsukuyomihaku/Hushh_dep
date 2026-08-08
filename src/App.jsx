@@ -1,7 +1,7 @@
 import React, {useState, useEffect} from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthPage from "./pages/AuthPage";
-import VerifyEmailPage from "./pages/VerifyEmailPage";
+import verifyEmailPage from "./pages/VerifyEmailPage";
 import ChatPage from "./pages/ChatPage";
 import BenchmarkPage from "./pages/BenchmarkPage";
 
