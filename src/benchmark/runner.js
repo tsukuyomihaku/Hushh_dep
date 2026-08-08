@@ -152,22 +152,39 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress, cu
       await algo.decrypt(key, iv, ciphertext);
     }
 
-    for (let i = 0; i < trials; i++) {
-      const t0 = performance.now();
-      const { ciphertext, iv } = await algo.encrypt(key, plaintext);
-      encryptTimes.push(performance.now() - t0);
+    // Browsers deliberately reduce performance.now()'s resolution (a
+    // Spectre-attack mitigation), so a single fast operation — e.g.
+    // AES-256-GCM encrypting 1KB — often measures as exactly 0ms no
+    // matter how many trials run, regardless of its true speed. Timing a
+    // BATCH of repetitions together and dividing by the batch size
+    // averages out below the timer's resolution, producing a real,
+    // meaningful sub-millisecond estimate instead of a floored zero.
+    const BATCH_SIZE = 50;
 
-      const t2 = performance.now();
-      const decrypted = await algo.decrypt(key, iv, ciphertext);
-      decryptTimes.push(performance.now() - t2);
+    for (let i = 0; i < trials; i++) {
+      const tEnc0 = performance.now();
+      let lastCiphertext, lastIv;
+      for (let b = 0; b < BATCH_SIZE; b++) {
+        const { ciphertext, iv } = await algo.encrypt(key, plaintext);
+        lastCiphertext = ciphertext;
+        lastIv = iv;
+      }
+      encryptTimes.push((performance.now() - tEnc0) / BATCH_SIZE);
+
+      const tDec0 = performance.now();
+      let decrypted;
+      for (let b = 0; b < BATCH_SIZE; b++) {
+        decrypted = await algo.decrypt(key, lastIv, lastCiphertext);
+      }
+      decryptTimes.push((performance.now() - tDec0) / BATCH_SIZE);
 
       if (bytesEqual(decrypted, plaintext)) correctCount++;
 
       if (algo.authenticated) {
-        const tampered = new Uint8Array(ciphertext);
+        const tampered = new Uint8Array(lastCiphertext);
         tampered[0] ^= 0xff;
         try {
-          await algo.decrypt(key, iv, tampered);
+          await algo.decrypt(key, lastIv, tampered);
         } catch {
           tamperRejectedCount++;
         }
