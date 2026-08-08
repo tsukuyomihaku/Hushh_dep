@@ -17,6 +17,53 @@ function secureRandomBytes(size) {
   return buf;
 }
 
+// The real send path (cryptoUtils.encryptMessage) never encrypts raw random
+// bytes — it TextEncoder-encodes an actual chat message string. Random
+// bytes are maximum-entropy and uniformly distributed across 0–255, while
+// real messages are UTF-8 text: mostly ASCII, repetitive, much lower
+// entropy. That difference doesn't change correctness (AES-GCM etc. don't
+// care what the input looks like), but it does mean a benchmark built on
+// random bytes isn't actually measuring "message" encryption — so cipher
+// trials build their plaintext from realistic chat text instead.
+const SAMPLE_MESSAGES = [
+  "Hey, are you free to talk later tonight? ",
+  "I just sent over the files, let me know if anything's missing. ",
+  "Can we push the meeting to 3pm instead? ",
+  "Thanks so much for helping me out earlier, really appreciate it. ",
+  "Did you see the game last night? That final play was insane. ",
+  "Sure, that works for me — see you then. ",
+  "Sorry for the late reply, been swamped with work all day. ",
+  "Let's grab coffee sometime this week if you're around. ",
+  "I'll call you as soon as I'm done with this. ",
+  "No worries at all, take your time, there's no rush. ",
+];
+
+function realisticMessageBytes(size, corpus) {
+  const source = corpus && corpus.length ? corpus : SAMPLE_MESSAGES;
+  const encoder = new TextEncoder();
+  let text = "";
+  let i = 0;
+  while (encoder.encode(text).length < size) {
+    text += source[i % source.length] + " ";
+    i++;
+  }
+  let encoded = encoder.encode(text);
+  if (encoded.length > size) {
+    encoded = encoded.slice(0, size);
+    // Trimming to an exact byte count can land mid-way through a multi-byte
+    // UTF-8 character; back off one byte at a time until it's valid again.
+    while (encoded.length > 0) {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(encoded);
+        break;
+      } catch {
+        encoded = encoded.slice(0, -1);
+      }
+    }
+  }
+  return encoded;
+}
+
 function stats(samples) {
   const sorted = [...samples].sort((a, b) => a - b);
   const sum = sorted.reduce((a, b) => a + b, 0);
@@ -36,7 +83,20 @@ function bytesEqual(a, b) {
   return true;
 }
 
+// A handful of untimed "throwaway" calls before measurement starts. JS
+// engines run new code interpreted/unoptimized at first and only compile it
+// to fast machine code after it's been called several times — without a
+// warm-up, the first few timed trials measure that slow unoptimized path
+// and skew the average, especially at low trial counts.
+const WARMUP_ITERATIONS = 5;
+
 export async function benchmarkKeyExchange(algo, trials, onProgress) {
+  for (let i = 0; i < WARMUP_ITERATIONS; i++) {
+    const a = await algo.keygen();
+    const b = await algo.keygen();
+    await algo.exchange(a, b);
+  }
+
   const keygenTimes = [];
   const exchangeTimes = [];
   let correctCount = 0;
@@ -75,7 +135,7 @@ export async function benchmarkKeyExchange(algo, trials, onProgress) {
   };
 }
 
-export async function benchmarkCipher(algo, trials, messageSizes, onProgress) {
+export async function benchmarkCipher(algo, trials, messageSizes, onProgress, customCorpus) {
   const results = {};
 
   for (const size of messageSizes) {
@@ -85,7 +145,12 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress) {
     let tamperRejectedCount = 0;
 
     const key = await algo.keygen();
-    const plaintext = secureRandomBytes(size);
+    const plaintext = realisticMessageBytes(size, customCorpus);
+
+    for (let i = 0; i < WARMUP_ITERATIONS; i++) {
+      const { ciphertext, iv } = await algo.encrypt(key, plaintext);
+      await algo.decrypt(key, iv, ciphertext);
+    }
 
     for (let i = 0; i < trials; i++) {
       const t0 = performance.now();

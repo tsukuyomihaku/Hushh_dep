@@ -26,37 +26,26 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center px-6 py-12 relative overflow-hidden">
-      {/* ambient cipher glyphs drifting in the background */}
-      <BackgroundCiphertext />
-
       <div className="relative w-full max-w-4xl grid md:grid-cols-2 gap-0 rounded-2xl overflow-hidden border border-surface-line shadow-2xl shadow-black/40">
         {/* Left: brand / thesis panel */}
-        <div className="bg-surface p-10 md:p-12 flex flex-col justify-between relative">
+        <div className="bg-surface p-10 md:p-12 flex flex-col justify-center relative">
           <div className="absolute inset-0 opacity-[0.06] pointer-events-none seal-texture" />
-          <div>
-            <div className="flex items-center gap-3 mb-10">
-              <SealMark />
-              <span className="font-mono text-xs tracking-[0.25em] text-brass uppercase">
-                Hushh!
-              </span>
-            </div>
+          <div className="flex flex-col items-center text-center mb-6">
+            <span className="font-display text-6xl md:text-7xl font-bold italic tracking-tight text-brass">
+              Hushh!
+            </span>
+          </div>
+          <div className="text-center">
             <h1 className="font-display text-4xl md:text-[2.75rem] leading-[1.05] text-ink-100 mb-5">
-              Whatever you send,
+              A quiet place
               <br />
-              <span className="text-brass italic">only they</span> can read it.
+              <span className="text-brass italic">to talk</span>, just the two of you.
             </h1>
-            <p className="text-ink-500 text-[15px] leading-relaxed max-w-sm">
-              Keys are generated in your browser and never leave it. Messages
-              are sealed with AES-256-GCM before they ever reach a server —
-              intercept them and you'll get nothing but noise.
+            <p className="text-ink-500 text-[15px] leading-relaxed max-w-sm mx-auto">
+              Your conversations stay private by default — nothing you send
+              here is visible to anyone outside the chat.
             </p>
           </div>
-
-          <dl className="grid grid-cols-3 gap-4 mt-10 pt-8 seal-divider">
-            <Stat label="Curve" value="P-256" />
-            <Stat label="Cipher" value="AES-256" />
-            <Stat label="Key exposure" value="Zero" />
-          </dl>
         </div>
 
         {/* Right: form panel */}
@@ -115,33 +104,21 @@ export default function AuthPage() {
             >
               {busy
                 ? mode === "register"
-                  ? "Generating your keys…"
-                  : "Verifying…"
+                  ? "Setting up your account…"
+                  : "Signing in…"
                 : mode === "register"
-                ? "Generate keys & create account"
+                ? "Create account"
                 : "Sign in"}
             </button>
 
             {mode === "register" && (
               <p className="text-ink-500 text-xs text-center leading-relaxed">
-                A P-256 key pair is generated the instant you submit this
-                form. Your private key stays in this browser tab only.
+                Takes a few seconds — you'll be chatting right away.
               </p>
             )}
           </form>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Stat({ label, value }) {
-  return (
-    <div>
-      <dt className="text-[10px] tracking-widest uppercase text-ink-500 mb-1">
-        {label}
-      </dt>
-      <dd className="font-mono text-sm text-ink-100">{value}</dd>
     </div>
   );
 }
@@ -176,48 +153,6 @@ function Field({ label, type, value, onChange, placeholder, required, minLength 
         className="focus-brass bg-void border border-surface-line rounded-lg px-3.5 py-2.5 text-ink-100 placeholder:text-ink-500/50 outline-none transition-colors focus:border-brass"
       />
     </label>
-  );
-}
-
-function SealMark() {
-  return (
-    <div className="relative w-8 h-8 rounded-full bg-brass/15 border border-brass/40 flex items-center justify-center">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-        <path
-          d="M12 2L4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-4z"
-          stroke="#D4A24C"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M9 12l2 2 4-4"
-          stroke="#D4A24C"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </div>
-  );
-}
-
-function BackgroundCiphertext() {
-  const hex = "8f3c9a1d2e6b7045c8912fabcde3456";
-  const rows = Array.from({ length: 10 });
-  return (
-    <div className="absolute inset-0 -z-10 opacity-[0.05] select-none pointer-events-none">
-      {rows.map((_, i) => (
-        <div
-          key={i}
-          className="font-mono whitespace-nowrap text-ink-100 text-xs"
-          style={{
-            transform: `translateX(${(i % 2 === 0 ? -1 : 1) * 40}px)`,
-          }}
-        >
-          {hex.repeat(12)}
-        </div>
-      ))}
-    </div>
   );
 }
 

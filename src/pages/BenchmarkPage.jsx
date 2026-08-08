@@ -7,7 +7,49 @@ import { keyExchangeAlgorithms, cipherAlgorithms } from "../benchmark/algorithms
 import { benchmarkKeyExchange, benchmarkCipher, resultsToCSV } from "../benchmark/runner";
 
 const MESSAGE_SIZES = [16, 1024, 102400];
-const COLORS = ["#D4A24C", "#5B7FDE", "#5FBF8B", "#E0575B", "#89A6EE"];
+// Five visually distinct hues (avoid adjacent similar tones like two blues).
+const COLORS = ["#D4A24C", "#5B7FDE", "#5FBF8B", "#E0575B", "#B15BDE"];
+// Dash patterns give a second, color-independent way to tell lines apart —
+// helps colorblind readers and printed/grayscale copies of the paper.
+const DASH_PATTERNS = [undefined, "6 4", "2 2", "8 3 2 3", "1 3"];
+
+// Several algorithms share the exact same security-bit rating (e.g. ECDH
+// P-256 and X25519 are both 128-bit), which means their scatter points land
+// on the identical x-coordinate and one completely hides the other. This
+// spreads tied points apart by a small fixed offset purely for visibility —
+// the true, un-jittered security bits is kept alongside each point
+// (as trueSecurityBits) so the tooltip and any exported data stay accurate.
+function jitterTiedPoints(results, getSecurityBits) {
+  const groups = new Map();
+  results.forEach((r) => {
+    const bits = getSecurityBits(r);
+    if (!groups.has(bits)) groups.set(bits, []);
+    groups.get(bits).push(r);
+  });
+  const jitterById = new Map();
+  groups.forEach((group) => {
+    const n = group.length;
+    group.forEach((r, idx) => {
+      const offset = n > 1 ? (idx - (n - 1) / 2) * 3 : 0;
+      jitterById.set(r.id, getSecurityBits(r) + offset);
+    });
+  });
+  return jitterById;
+}
+
+// Custom scatter tooltip: shows the algorithm name and TRUE security bits
+// (not the jittered display position) alongside the timing value.
+function ScatterTooltipContent({ active, payload, timeLabel }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div className="bg-surface border border-surface-line rounded px-3 py-2 text-xs">
+      <p className="text-ink-100 font-medium mb-1">{p.name}</p>
+      <p className="text-ink-500">Security: {p.trueSecurityBits}-bit</p>
+      <p className="text-ink-500">{timeLabel}: {p.timeMs} ms</p>
+    </div>
+  );
+}
 
 export default function BenchmarkPage() {
   const [trials, setTrials] = useState(20);
@@ -15,6 +57,7 @@ export default function BenchmarkPage() {
   const [progress, setProgress] = useState("");
   const [keResults, setKeResults] = useState([]);
   const [cipherResults, setCipherResults] = useState([]);
+  const [customText, setCustomText] = useState("");
 
   async function runAll() {
     setRunning(true);
@@ -33,10 +76,16 @@ export default function BenchmarkPage() {
       }
 
       const cOut = [];
+      const customCorpus = customText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
       for (const algo of cipherAlgorithms) {
         setProgress(`Cipher: ${algo.name}…`);
-        const r = await benchmarkCipher(algo, trials, MESSAGE_SIZES, (id, size, i, t) =>
-          setProgress(`Cipher: ${algo.name} — ${size}B (${i}/${t})`)
+        const r = await benchmarkCipher(
+          algo, trials, MESSAGE_SIZES,
+          (id, size, i, t) => setProgress(`Cipher: ${algo.name} — ${size}B (${i}/${t})`),
+          customCorpus
         );
         cOut.push(r);
         setCipherResults([...cOut]);
@@ -74,12 +123,6 @@ export default function BenchmarkPage() {
     cipherResults.forEach((r) => { row[r.name] = r.bySize[size]?.encryptMs.mean ?? 0; });
     return row;
   });
-  const keSecurityScatter = keResults.map((r) => ({
-    name: r.name, securityBits: r.securityBits, timeMs: r.keygenMs.mean,
-  }));
-  const cipherSecurityScatter = cipherResults.map((r) => ({
-    name: r.name, securityBits: r.securityBits, timeMs: r.bySize[1024]?.encryptMs.mean ?? 0,
-  }));
 
   return (
     <div className="min-h-screen bg-void text-ink-100 p-8 font-body">
@@ -88,6 +131,27 @@ export default function BenchmarkPage() {
         Speed, correctness, and security comparison for the research paper. All operations run
         client-side in this browser via the Web Crypto API and audited JS libraries.
       </p>
+
+      <div className="mb-6 max-w-2xl">
+        <label className="text-sm text-ink-300 block mb-1.5">
+          Test with your own messages{" "}
+          <span className="text-ink-500 font-normal">
+            (optional — one message per line)
+          </span>
+        </label>
+        <textarea
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value)}
+          placeholder={`Paste the actual messages you plan to send, e.g.\nHey, are you around this weekend?\nSure, let's do Saturday afternoon.`}
+          rows={4}
+          className="w-full bg-surface border border-surface-line rounded-lg px-3.5 py-2.5 text-ink-100 placeholder:text-ink-500/50 text-sm outline-none transition-colors focus:border-brass resize-y"
+        />
+        <p className="text-[11px] text-ink-500 mt-1.5">
+          {customText.trim()
+            ? "Cipher benchmarks below will be built from this text instead of the built-in sample sentences."
+            : "Leave blank to use built-in sample chat sentences instead."}
+        </p>
+      </div>
 
       <div className="flex items-center gap-4 mb-8 flex-wrap">
         <label className="text-sm text-ink-300">
@@ -136,13 +200,29 @@ export default function BenchmarkPage() {
                 <CartesianGrid stroke="#33364A" />
                 <XAxis type="number" dataKey="securityBits" name="Security (bits)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
-                  label={{ value: "Security (bits)", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
+                  label={{ value: "Security (bits) — jittered to separate ties", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
                 <YAxis type="number" dataKey="timeMs" name="Keygen (ms)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Keygen (ms)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
-                <ZAxis range={[120, 120]} />
-                <Tooltip cursor={{ strokeDasharray: "3 3" }} contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }} />
-                <Scatter name="Key exchange algorithms" data={keSecurityScatter} fill="#D4A24C" />
+                <ZAxis range={[130, 130]} />
+                <Tooltip content={<ScatterTooltipContent timeLabel="Keygen" />} />
+                <Legend />
+                {(() => {
+                  const jitter = jitterTiedPoints(keResults, (r) => r.securityBits);
+                  return keResults.map((r, i) => (
+                    <Scatter
+                      key={r.id}
+                      name={r.name}
+                      data={[{
+                        name: r.name,
+                        securityBits: jitter.get(r.id),
+                        trueSecurityBits: r.securityBits,
+                        timeMs: r.keygenMs.mean,
+                      }]}
+                      fill={COLORS[i % COLORS.length]}
+                    />
+                  ));
+                })()}
               </ScatterChart>
             </ResponsiveContainer>
           </div>
@@ -206,7 +286,15 @@ export default function BenchmarkPage() {
                 <Tooltip contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }} />
                 <Legend />
                 {cipherResults.map((r, i) => (
-                  <Line key={r.id} type="monotone" dataKey={r.name} stroke={COLORS[i % COLORS.length]} strokeWidth={2} />
+                  <Line
+                    key={r.id}
+                    type="monotone"
+                    dataKey={r.name}
+                    stroke={COLORS[i % COLORS.length]}
+                    strokeWidth={2}
+                    strokeDasharray={DASH_PATTERNS[i % DASH_PATTERNS.length]}
+                    dot={{ r: 3 }}
+                  />
                 ))}
               </LineChart>
             </ResponsiveContainer>
@@ -219,13 +307,29 @@ export default function BenchmarkPage() {
                 <CartesianGrid stroke="#33364A" />
                 <XAxis type="number" dataKey="securityBits" name="Security (bits)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
-                  label={{ value: "Security (bits)", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
+                  label={{ value: "Security (bits) — jittered to separate ties", fill: "#B7B9CC", position: "insideBottom", offset: -5 }} />
                 <YAxis type="number" dataKey="timeMs" name="Encrypt 1KB (ms)"
                   tick={{ fill: "#B7B9CC", fontSize: 11 }}
                   label={{ value: "Encrypt 1KB (ms)", fill: "#B7B9CC", angle: -90, position: "insideLeft" }} />
-                <ZAxis range={[120, 120]} />
-                <Tooltip cursor={{ strokeDasharray: "3 3" }} contentStyle={{ background: "#1D1F2E", border: "1px solid #33364A" }} />
-                <Scatter name="Ciphers" data={cipherSecurityScatter} fill="#5B7FDE" />
+                <ZAxis range={[130, 130]} />
+                <Tooltip content={<ScatterTooltipContent timeLabel="Encrypt 1KB" />} />
+                <Legend />
+                {(() => {
+                  const jitter = jitterTiedPoints(cipherResults, (r) => r.securityBits);
+                  return cipherResults.map((r, i) => (
+                    <Scatter
+                      key={r.id}
+                      name={r.name}
+                      data={[{
+                        name: r.name,
+                        securityBits: jitter.get(r.id),
+                        trueSecurityBits: r.securityBits,
+                        timeMs: r.bySize[1024]?.encryptMs.mean ?? 0,
+                      }]}
+                      fill={COLORS[i % COLORS.length]}
+                    />
+                  ));
+                })()}
               </ScatterChart>
             </ResponsiveContainer>
           </div>
@@ -269,4 +373,4 @@ export default function BenchmarkPage() {
       )}
     </div>
   );
-}g
+}
