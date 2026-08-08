@@ -119,6 +119,11 @@ export async function benchmarkKeyExchange(algo, trials, onProgress) {
       correctCount++;
     }
     if (onProgress) onProgress(algo.id, i + 1, trials);
+
+    // Same reasoning as the cipher benchmark: yield back to the browser
+    // between trials so a long run of RSA/ML-KEM keygens doesn't make the
+    // tab feel frozen.
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   return {
@@ -155,11 +160,14 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress, cu
     // Browsers deliberately reduce performance.now()'s resolution (a
     // Spectre-attack mitigation), so a single fast operation — e.g.
     // AES-256-GCM encrypting 1KB — often measures as exactly 0ms no
-    // matter how many trials run, regardless of its true speed. Timing a
-    // BATCH of repetitions together and dividing by the batch size
-    // averages out below the timer's resolution, producing a real,
-    // meaningful sub-millisecond estimate instead of a floored zero.
-    const BATCH_SIZE = 50;
+    // matter how many trials run. Timing a BATCH of repetitions together
+    // and dividing by the batch size averages out below the timer's
+    // resolution. This is only actually needed for small/fast payloads —
+    // a single 100KB operation already takes measurable time on its own
+    // (slow legacy algorithms like 3DES can take tens of ms even once),
+    // so batching there would only multiply already-long runtimes for no
+    // precision benefit. Batch size scales down as message size grows.
+    const BATCH_SIZE = size <= 1024 ? 30 : 1;
 
     for (let i = 0; i < trials; i++) {
       const tEnc0 = performance.now();
@@ -190,6 +198,13 @@ export async function benchmarkCipher(algo, trials, messageSizes, onProgress, cu
         }
       }
       if (onProgress) onProgress(algo.id, size, i + 1, trials);
+
+      // Explicitly yield back to the browser between trials. A long run
+      // of back-to-back awaited crypto calls can still starve rendering —
+      // this hands control back to the browser (letting the progress text
+      // repaint, and keeping the tab from feeling frozen) before the next
+      // trial starts.
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
     const encStats = stats(encryptTimes);
