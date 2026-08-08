@@ -221,7 +221,7 @@ export default function BenchmarkPage() {
       {keResults.length > 0 && (
         <section className="mb-10">
           <h2 className="text-xl text-brass mb-3">Key Exchange Algorithms</h2>
-          <div className="h-64 mb-4 bg-surface rounded-lg p-4">
+          <div className="h-[28rem] mb-4 bg-surface rounded-lg p-4">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={keChartData}>
                 <CartesianGrid stroke="#33364A" />
