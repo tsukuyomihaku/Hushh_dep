@@ -1,10 +1,25 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
 export default function VerifyEmailPage() {
   const { user, logout, resendVerification, refreshEmailVerification } = useAuth();
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Poll every 4 seconds in the background so the moment the person clicks
+  // the link in their email, this screen notices on its own and hands off
+  // to the chat — no manual "check again" click or page refresh needed.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshEmailVerification().catch(() => {
+        // Silent — a transient failed background check shouldn't interrupt
+        // the person; the manual "check again" button still works as a
+        // fallback, and the next automatic poll will just try again.
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCheck() {
     setBusy(true);
@@ -41,12 +56,20 @@ export default function VerifyEmailPage() {
         <p className="text-ink-500 text-sm leading-relaxed mb-6">
           We sent a verification link to{" "}
           <span className="text-ink-100 font-mono">{user?.email}</span>. Click
-          it, then come back here and press "I've verified."
+          it — this page will pick it up automatically, no need to come back
+          and refresh.
         </p>
 
         {status && (
           <p className="text-xs font-mono text-brass mb-4 leading-relaxed">{status}</p>
         )}
+
+        <div className="flex items-center justify-center gap-2 mb-6">
+          <span className="w-1.5 h-1.5 rounded-full bg-signal-success animate-pulse" />
+          <span className="text-[11px] font-mono text-ink-500">
+            watching for verification…
+          </span>
+        </div>
 
         <div className="flex flex-col gap-3">
           <button
