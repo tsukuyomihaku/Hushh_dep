@@ -1,7 +1,7 @@
 import React, {useState, useEffect} from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import AuthPage from "./pages/AuthPage";
-import verifyEmailPage from "./pages/VerifyEmailPage";
+import verifyEmailPage from "./pages/verifyEmailPage";
 import ChatPage from "./pages/ChatPage";
 import BenchmarkPage from "./pages/BenchmarkPage";
 
@@ -20,7 +20,7 @@ function Gate() {
 
   if (loading) return <p>checking session…</p>;
   if (!user) return <AuthPage />;
-  if (!emailVerified) return <VerifyEmailPage />;
+  if (!emailVerified) return <verifyEmailPage />;
   if (!privateKey) return <AuthPage />;
   return <ChatPage />;
 }
